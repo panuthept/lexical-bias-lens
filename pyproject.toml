@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=42.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lexical-bias-lens"
+version = "0.0.1"
+description = "A comprehensive toolkit for detecting, analyzing, and mitigating lexical biases in datasets and language models."
+readme = "README.md"
+requires-python = "<=3.13.5"
+license = "Apache-2.0"
+authors = [
+    {name = "Panuthep Tasawong", email = "falcon_270394@hotmail.co.th"},
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/panuthept/lexical-bias-lens"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lexical_bias_lens*"]
