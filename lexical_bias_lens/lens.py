@@ -9,7 +9,7 @@ from typing import Literal, List, Tuple, Any, Optional
 
 
 def calculate_normalized_entropy(pred, num_classes) -> float:
-    return sum([-math.log(p) * p if p > 0 else 0 for c, p in pred]) / math.log(num_classes)
+    return sum([-math.log(p) * p if p > 0 else 0 for c, p, l in pred]) / math.log(num_classes)
 
 class LexicalBiasLens(LexicalBiasModel):
     def __init__(self, *args, **kwargs):
@@ -37,10 +37,10 @@ class LexicalBiasLens(LexicalBiasModel):
     def find(
         self, 
         target_label: str = None,
-        target_pred: str = None,
+        pred_label: str = None,
         max_entropy: float = 1.0,
         min_entropy: float = 0.0,
-        ranking_order: Optional[Literal["ascending", "decending"]] = None, 
+        ranking_order: Optional[Literal["ascending", "decending"]] = None,  # Ranking order with respect to critetia
         inputs: List[List[Any]] = None, 
         labels: List[str] = None, 
         verbose: bool = True,
@@ -50,8 +50,8 @@ class LexicalBiasLens(LexicalBiasModel):
         """
         if target_label is not None:
             assert target_label in self.available_labels, f"target_label '{target_label}' not found in available labels: {self.available_labels}"
-        if target_pred is not None:
-            assert target_pred in self.available_labels, f"target_pred '{target_pred}' not found in available labels: {self.available_labels}"
+        if pred_label is not None:
+            assert pred_label in self.available_labels, f"target_pred '{pred_label}' not found in available labels: {self.available_labels}"
         assert 0.0 <= min_entropy <= max_entropy <= 1.0, "Entropy bounds must satisfy 0.0 <= min_entropy <= max_entropy <= 1.0"
         assert ranking_order in [None, "ascending", "decending"], "ranking_order must be one of None, 'ascending', or 'decending'"
 
@@ -62,14 +62,16 @@ class LexicalBiasLens(LexicalBiasModel):
         for i, (label, pred, entropy) in enumerate(zip(self.labels, self.preds, self.entropies)):
             pred_label = pred[0][0]  # Get the label with the highest probability
             if (target_label is None or label == target_label) and \
-               (target_pred is None or pred_label == target_pred) and \
+               (pred_label is None or pred_label == pred_label) and \
                (entropy <= max_entropy) and \
                (entropy >= min_entropy):
                 filtered_indices.append(i)
+
+        combined_scores = [(1 - self.entropies[i]) * 1e13 + self.preds[i][0][2] for i in filtered_indices]
         if ranking_order == "ascending":
-            filtered_indices = sorted(filtered_indices, key=lambda i: self.entropies[i])
+            filtered_indices = sorted(filtered_indices, key=lambda i: combined_scores[filtered_indices.index(i)], reverse=True)
         elif ranking_order == "decending":
-            filtered_indices = sorted(filtered_indices, key=lambda i: self.entropies[i], reverse=True)
+            filtered_indices = sorted(filtered_indices, key=lambda i: combined_scores[filtered_indices.index(i)])
         return filtered_indices
     
     def analyze(self, tokens: List[Any], metric: str = None) -> List[Tuple[str, float]]:
@@ -100,7 +102,6 @@ class LexicalBiasLens(LexicalBiasModel):
         data_profile = {
             "labels": self.labels,
             "preds": self.preds,
-            "entropies": self.entropies
         }
         with open(os.path.join(filepath, "data_profile.json"), "w") as f:
             json.dump(data_profile, f, ensure_ascii=False, indent=4)
@@ -121,7 +122,7 @@ class LexicalBiasLens(LexicalBiasModel):
         lens.build_bias_profile()
         lens.labels = data_profile["labels"]
         lens.preds = data_profile["preds"]
-        lens.entropies = data_profile["entropies"]
+        lens.entropies = [calculate_normalized_entropy(pred, num_classes=lens.num_classes) for pred in lens.preds]
         return lens
     
 
@@ -151,7 +152,7 @@ if __name__ == "__main__":
     else:
         lens = LexicalBiasLens.load("saved_models/lexical_bias_lens", metric="LMI")
     print(f"Average Entropy: {sum(lens.entropies) / len(lens.entropies)}")
-    indices = lens.find(target_label="Unsafe", target_pred="Unsafe", ranking_order="decending")
+    indices = lens.find(target_label="Safe", pred_label="Safe", ranking_order="ascending")
     for i in indices[:10]:
         print(f"Input: {" ".join(inputs[i])}")
         print(f"Label: {labels[i]}")
@@ -160,13 +161,11 @@ if __name__ == "__main__":
         print("Analyzed:")
         for label, analysis in lens.analyze(inputs[i]).items():
             print(f"  Label: {label}")
-            sum_score = sum([score * count for token, count, score in analysis])
-            print(f"    Total Score: {sum_score}")
             for token, count, score in analysis[:5]:
                 print(f"    Token: {token}, Count: {count}, Score: {score}")
         print("-----")
     print("...")
-    indices = lens.find(target_label="Unsafe", target_pred="Unsafe", ranking_order="ascending")
+    indices = lens.find(target_label="Unsafe", pred_label="Safe", ranking_order="ascending")
     for i in indices[:10]:
         print(f"Input: {" ".join(inputs[i])}")
         print(f"Label: {labels[i]}")
@@ -175,8 +174,6 @@ if __name__ == "__main__":
         print("Analyzed:")
         for label, analysis in lens.analyze(inputs[i]).items():
             print(f"  Label: {label}")
-            sum_score = sum([score * count for token, count, score in analysis])
-            print(f"    Total Score: {sum_score}")
             for token, count, score in analysis[:5]:
                 print(f"    Token: {token}, Count: {count}, Score: {score}")
         print("-----")
