@@ -96,10 +96,10 @@ class LexicalBiasModel:
                 label_stats[ngram] = {"LMI": LMI, "PMI": PMI, "NPMI": NPMI}
             self.bias_profile[label] = label_stats
 
-    def predict(self, inputs: List[List[str]], verbose: bool = True) -> List[Dict[str, float]]:
+    def predict(self, samples: List[List[str]], verbose: bool = True) -> List[Dict[str, float]]:
         assert self.bias_profile is not None, "Please fit() the model before prediction."
         preds = []
-        for tokens in tqdm(inputs, disable=not verbose, desc="Predicting"):
+        for tokens in tqdm(samples, disable=not verbose, desc="Predicting"):
             class_scores = {label: 0.0 for label in self.bias_profile.keys()}
             for label in class_scores:
                 stats = self.bias_profile[label]
@@ -157,7 +157,7 @@ if __name__ == "__main__":
 
     dataset = load_dataset("aisingapore/SEA-Safeguard-Train-Cultural-v3", "Generic", split="train")
     
-    inputs = []
+    samples = []
     labels = []
     for sample in dataset:
         if sample['language'] != "English":
@@ -168,18 +168,18 @@ if __name__ == "__main__":
         else:
             input = (sample['prompt'] + "\n" + sample['response']).split()
             label = sample['response_label']
-        inputs.append(input)
+        samples.append(input)
         labels.append(label)
 
     save_path = "saved_models/lexical_bias_model"
     if not os.path.exists(save_path):
         model = LexicalBiasModel(max_n=1, metric="NLMI")
-        model.fit(inputs, labels)
+        model.fit(samples, labels)
         model.save(save_path)
     else:
         model = LexicalBiasModel.load(save_path, metric="NLMI")
     print("Vocab size:", model.vocab_size)
-    outputs = model.predict(inputs)
+    outputs = model.predict(samples)
 
     tp = 0
     fp = 0
