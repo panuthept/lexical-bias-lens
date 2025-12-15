@@ -110,7 +110,7 @@ class LexicalBiasModel:
                 class_probs = {label: 1.0 / len(class_scores) for label in class_scores}
             else:
                 class_probs = {label: score / sum(class_scores.values()) for label, score in class_scores.items()}
-            preds.append(sorted([(label, prob) for label, prob in class_probs.items()], key=lambda x: x[1], reverse=True))
+            preds.append(sorted([(label, class_probs[label], class_scores[label]) for label in class_probs.keys()], key=lambda x: x[1], reverse=True))
         return preds
     
     def save(self, filepath: str) -> None:
