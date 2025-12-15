@@ -24,24 +24,44 @@ class LexicalBiasLens(LexicalBiasModel):
         self.preds = []
         self.entropies = []
 
-    def create_profile(self, inputs: List[List[Any]], labels: List[str], verbose: bool = True) -> None:
+    def create_profile(self, samples: List[List[Any]], labels: List[str], verbose: bool = True) -> None:
         """
         Profiles the dataset and computes the entropy scores for each sample.
         """
         self.clear()
         self.labels = deepcopy(labels)
-        self.fit(inputs, labels, verbose=verbose)
-        self.preds = self.predict(inputs, verbose=verbose)
+        self.fit(samples, labels, verbose=verbose)
+        self.preds = self.predict(samples, verbose=verbose)
         self.entropies = [calculate_normalized_entropy(pred, num_classes=self.num_classes) for pred in self.preds]
 
-    def find(
+    def find_tokens(
+        self,
+        target_label: str,
+        top_k: int = 10,
+        ranking_order: Literal["ascending", "decending"] = "decending",  # Ranking order with respect to level of bias
+        samples: List[List[Any]] = None, 
+        labels: List[str] = None, 
+        verbose: bool = True,
+    ) -> List[Tuple[str, float]]:
+        """
+        Identifies and returns the most biased tokens for a specific target label.
+        """
+        assert target_label in self.available_labels, f"target_label '{target_label}' not found in available labels: {self.available_labels}"
+        if samples is not None and labels is not None:
+            self.create_profile(samples, labels, verbose=verbose)
+
+        token_scores = sorted(self.bias_profile[target_label].items(), key=lambda x: x[1][self.metric], reverse=(ranking_order=="decending"))
+        token_scores = [(token, scores[self.metric]) for token, scores in token_scores if scores[self.metric] >= 0][:top_k]
+        return token_scores
+
+    def find_samples(
         self, 
         target_label: str = None,
         pred_label: str = None,
         max_entropy: float = 1.0,
         min_entropy: float = 0.0,
-        ranking_order: Optional[Literal["ascending", "decending"]] = None,  # Ranking order with respect to critetia
-        inputs: List[List[Any]] = None, 
+        ranking_order: Optional[Literal["ascending", "decending"]] = None,  # Ranking order with respect to level of bias
+        samples: List[List[Any]] = None, 
         labels: List[str] = None, 
         verbose: bool = True,
     ) -> List[int]:
@@ -55,8 +75,8 @@ class LexicalBiasLens(LexicalBiasModel):
         assert 0.0 <= min_entropy <= max_entropy <= 1.0, "Entropy bounds must satisfy 0.0 <= min_entropy <= max_entropy <= 1.0"
         assert ranking_order in [None, "ascending", "decending"], "ranking_order must be one of None, 'ascending', or 'decending'"
 
-        if inputs is not None and labels is not None:
-            self.create_profile(inputs, labels, verbose=verbose)
+        if samples is not None and labels is not None:
+            self.create_profile(samples, labels, verbose=verbose)
 
         filtered_indices = []
         for i, (label, pred, entropy) in enumerate(zip(self.labels, self.preds, self.entropies)):
@@ -69,9 +89,9 @@ class LexicalBiasLens(LexicalBiasModel):
 
         combined_scores = [(1 - self.entropies[i]) * 1e13 + self.preds[i][0][2] for i in filtered_indices]
         if ranking_order == "ascending":
-            filtered_indices = sorted(filtered_indices, key=lambda i: combined_scores[filtered_indices.index(i)], reverse=True)
-        elif ranking_order == "decending":
             filtered_indices = sorted(filtered_indices, key=lambda i: combined_scores[filtered_indices.index(i)])
+        elif ranking_order == "decending":
+            filtered_indices = sorted(filtered_indices, key=lambda i: combined_scores[filtered_indices.index(i)], reverse=True)
         return filtered_indices
     
     def analyze(self, tokens: List[Any], metric: str = None) -> List[Tuple[str, float]]:
@@ -131,7 +151,7 @@ if __name__ == "__main__":
 
     dataset = load_dataset("aisingapore/SEA-Safeguard-Train-Cultural-v3", "Generic", split="train")
     
-    inputs = []
+    samples = []
     labels = []
     for sample in dataset:
         if sample['language'] != "English":
@@ -142,37 +162,43 @@ if __name__ == "__main__":
         else:
             input = (sample['prompt'] + "\n" + sample['response']).split()
             label = sample['response_label']
-        inputs.append(input)
+        samples.append(input)
         labels.append(label)
 
     if not os.path.exists("saved_models/lexical_bias_lens"):
         lens = LexicalBiasLens(max_n=1, metric="LMI")
-        lens.create_profile(inputs, labels)
+        lens.create_profile(samples, labels)
         lens.save("saved_models/lexical_bias_lens")
     else:
         lens = LexicalBiasLens.load("saved_models/lexical_bias_lens", metric="LMI")
+    token_scores = lens.find_tokens(target_label="Unsafe", top_k=20, ranking_order="decending")
+    print(token_scores)
+    print("-----")
+    token_scores = lens.find_tokens(target_label="Safe", top_k=20, ranking_order="decending")
+    print(token_scores)
+    print("...")
     print(f"Average Entropy: {sum(lens.entropies) / len(lens.entropies)}")
-    indices = lens.find(target_label="Safe", pred_label="Safe", ranking_order="ascending")
+    indices = lens.find_samples(target_label="Safe", pred_label="Safe", ranking_order="decending")
     for i in indices[:10]:
-        print(f"Input: {" ".join(inputs[i])}")
+        print(f"Input: {" ".join(samples[i])}")
         print(f"Label: {labels[i]}")
         print(f"Predictions: {lens.preds[i]}")
         print(f"Entropy: {lens.entropies[i]}")
         print("Analyzed:")
-        for label, analysis in lens.analyze(inputs[i]).items():
+        for label, analysis in lens.analyze(samples[i]).items():
             print(f"  Label: {label}")
             for token, count, score in analysis[:5]:
                 print(f"    Token: {token}, Count: {count}, Score: {score}")
         print("-----")
     print("...")
-    indices = lens.find(target_label="Unsafe", pred_label="Safe", ranking_order="ascending")
+    indices = lens.find_samples(target_label="Unsafe", pred_label="Safe", ranking_order="decending")
     for i in indices[:10]:
-        print(f"Input: {" ".join(inputs[i])}")
+        print(f"Input: {" ".join(samples[i])}")
         print(f"Label: {labels[i]}")
         print(f"Predictions: {lens.preds[i]}")
         print(f"Entropy: {lens.entropies[i]}")
         print("Analyzed:")
-        for label, analysis in lens.analyze(inputs[i]).items():
+        for label, analysis in lens.analyze(samples[i]).items():
             print(f"  Label: {label}")
             for token, count, score in analysis[:5]:
                 print(f"    Token: {token}, Count: {count}, Score: {score}")
