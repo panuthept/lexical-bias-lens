@@ -34,7 +34,7 @@ class LexicalBiasLens(LexicalBiasModel):
         self.preds = self.predict(samples, verbose=verbose)
         self.entropies = [calculate_normalized_entropy(pred, num_classes=self.num_classes) for pred in self.preds]
 
-    def find_tokens(
+    def find_bias_keywords(
         self,
         target_label: str,
         top_k: int = 10,
@@ -50,11 +50,11 @@ class LexicalBiasLens(LexicalBiasModel):
         if samples is not None and labels is not None:
             self.create_profile(samples, labels, verbose=verbose)
 
-        token_scores = sorted(self.bias_profile[target_label].items(), key=lambda x: x[1][self.metric], reverse=(ranking_order=="decending"))
-        token_scores = [(token, scores[self.metric]) for token, scores in token_scores if scores[self.metric] >= 0][:top_k]
-        return token_scores
+        keyword_scores = sorted(self.bias_profile[target_label].items(), key=lambda x: x[1][self.metric], reverse=(ranking_order=="decending"))
+        keyword_scores = [(token, scores[self.metric]) for token, scores in keyword_scores if scores[self.metric] >= 0][:top_k]
+        return keyword_scores
 
-    def find_samples(
+    def find_bias_samples(
         self, 
         target_label: str = None,
         pred_label: str = None,
@@ -93,6 +93,12 @@ class LexicalBiasLens(LexicalBiasModel):
         elif ranking_order == "decending":
             filtered_indices = sorted(filtered_indices, key=lambda i: combined_scores[filtered_indices.index(i)], reverse=True)
         return filtered_indices
+    
+    def find_counterfactual_samples(self):
+        """
+        Identifies and returns the indices of the samples that share highly similar surface realizations but are assigned different labels based on underlying semantic or pragmatic distinctions.
+        """
+        pass
     
     def analyze(self, tokens: List[Any], metric: str = None) -> List[Tuple[str, float]]:
         """
@@ -171,14 +177,14 @@ if __name__ == "__main__":
         lens.save("saved_models/lexical_bias_lens")
     else:
         lens = LexicalBiasLens.load("saved_models/lexical_bias_lens", metric="LMI")
-    token_scores = lens.find_tokens(target_label="Unsafe", top_k=20, ranking_order="decending")
-    print(token_scores)
+    keywords_scores = lens.find_bias_keywords(target_label="Unsafe", top_k=20, ranking_order="decending")
+    print(keywords_scores)
     print("-----")
-    token_scores = lens.find_tokens(target_label="Safe", top_k=20, ranking_order="decending")
-    print(token_scores)
+    keywords_scores = lens.find_bias_keywords(target_label="Safe", top_k=20, ranking_order="decending")
+    print(keywords_scores)
     print("...")
     print(f"Average Entropy: {sum(lens.entropies) / len(lens.entropies)}")
-    indices = lens.find_samples(target_label="Safe", pred_label="Safe", ranking_order="decending")
+    indices = lens.find_bias_samples(target_label="Safe", pred_label="Safe", ranking_order="decending")
     for i in indices[:10]:
         print(f"Input: {" ".join(samples[i])}")
         print(f"Label: {labels[i]}")
@@ -191,7 +197,7 @@ if __name__ == "__main__":
                 print(f"    Token: {token}, Count: {count}, Score: {score}")
         print("-----")
     print("...")
-    indices = lens.find_samples(target_label="Unsafe", pred_label="Safe", ranking_order="decending")
+    indices = lens.find_bias_samples(target_label="Unsafe", pred_label="Safe", ranking_order="decending")
     for i in indices[:10]:
         print(f"Input: {" ".join(samples[i])}")
         print(f"Label: {labels[i]}")
