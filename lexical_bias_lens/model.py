@@ -64,6 +64,8 @@ class LexicalBiasModel:
         for label in self.data_stats:
             self.data_stats[label] = {ngram: freq for ngram, freq in self.data_stats[label].items() if freq >= self.min_freq}
 
+    def fit_and_build(self, inputs: List[List[Any]], labels: List[str], verbose: bool = True) -> None:
+        self.fit(inputs, labels, verbose=verbose)
         self.build_bias_profile()
 
     def build_bias_profile(self) -> None:
@@ -97,7 +99,7 @@ class LexicalBiasModel:
             self.bias_profile[label] = label_stats
 
     def predict(self, samples: List[List[str]], verbose: bool = True) -> List[Dict[str, float]]:
-        assert self.bias_profile is not None, "Please fit() the model before prediction."
+        assert self.bias_profile is not None, "Please fit_and_build() the model before prediction."
         preds = []
         for tokens in tqdm(samples, disable=not verbose, desc="Predicting"):
             class_scores = {label: 0.0 for label in self.bias_profile.keys()}
@@ -174,7 +176,7 @@ if __name__ == "__main__":
     save_path = "saved_models/lexical_bias_model"
     if not os.path.exists(save_path):
         model = LexicalBiasModel(max_n=1, metric="NLMI")
-        model.fit(samples, labels)
+        model.fit_and_build(samples, labels)
         model.save(save_path)
     else:
         model = LexicalBiasModel.load(save_path, metric="NLMI")
