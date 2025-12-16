@@ -4,7 +4,7 @@ import math
 from copy import deepcopy
 from model import LexicalBiasModel
 from collections import defaultdict
-from utils.ngrams import get_ngrams
+from utils import get_ngrams, hash_sample
 from typing import Literal, List, Tuple, Any, Optional
 
 
@@ -14,41 +14,59 @@ def calculate_normalized_entropy(pred, num_classes) -> float:
 class LexicalBiasLens(LexicalBiasModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.hash2id = {}
         self.labels = []
         self.preds = []
         self.entropies = []
 
     def clear(self):
         super().clear()
+        self.hash2id = {}
         self.labels = []
         self.preds = []
         self.entropies = []
 
     def create_profile(self, samples: List[List[Any]], labels: List[str], verbose: bool = True) -> None:
         """
-        Profiles the dataset and computes the entropy scores for each sample.
+        Updates the existing profile with new samples and labels.
         """
-        self.clear()
-        self.labels = deepcopy(labels)
+        assert len(samples) == len(labels), "The number of samples must match the number of labels."
+        
         self.fit(samples, labels, verbose=verbose)
-        self.preds = self.predict(samples, verbose=verbose)
-        self.entropies = [calculate_normalized_entropy(pred, num_classes=self.num_classes) for pred in self.preds]
+        self.build_bias_profile()
+
+        labels = deepcopy(labels)
+        preds = self.predict(samples, verbose=verbose)
+        entropies = [calculate_normalized_entropy(pred, num_classes=self.num_classes) for pred in preds]
+
+        for i in range(len(preds)):
+            sample_hash = hash_sample(samples[i])
+            if sample_hash in self.hash2id:
+                # Update existing entry
+                idx = self.hash2id[sample_hash]
+                self.labels[idx] = labels[i]
+                self.preds[idx] = preds[i]
+                self.entropies[idx] = entropies[i]
+            else:
+                # Add new entry
+                self.hash2id[sample_hash] = len(self.labels)
+                self.labels.append(labels[i])
+                self.preds.append(preds[i])
+                self.entropies.append(entropies[i])
 
     def find_bias_keywords(
         self,
         target_label: str,
         top_k: int = 10,
         ranking_order: Literal["ascending", "decending"] = "decending",  # Ranking order with respect to level of bias
-        samples: List[List[Any]] = None, 
-        labels: List[str] = None, 
-        verbose: bool = True,
     ) -> List[Tuple[str, float]]:
         """
         Identifies and returns the most biased tokens for a specific target label.
         """
+        if self.bias_profile is None and self.data_stats is not None:
+            self.build_bias_profile()
+        assert self.bias_profile is not None, "Please create_profile() the model before finding bias keywords."
         assert target_label in self.available_labels, f"target_label '{target_label}' not found in available labels: {self.available_labels}"
-        if samples is not None and labels is not None:
-            self.create_profile(samples, labels, verbose=verbose)
 
         keyword_scores = sorted(self.bias_profile[target_label].items(), key=lambda x: x[1][self.metric], reverse=(ranking_order=="decending"))
         keyword_scores = [(token, scores[self.metric]) for token, scores in keyword_scores if scores[self.metric] >= 0][:top_k]
@@ -61,22 +79,17 @@ class LexicalBiasLens(LexicalBiasModel):
         max_entropy: float = 1.0,
         min_entropy: float = 0.0,
         ranking_order: Optional[Literal["ascending", "decending"]] = None,  # Ranking order with respect to level of bias
-        samples: List[List[Any]] = None, 
-        labels: List[str] = None, 
-        verbose: bool = True,
     ) -> List[int]:
         """
         Identifies and returns the indices of the samples that meet the specified criteria.
         """
+        assert len(self.labels) > 0 and len(self.preds) > 0 and len(self.entropies) > 0, "Please create_profile() before finding bias samples."
         if target_label is not None:
             assert target_label in self.available_labels, f"target_label '{target_label}' not found in available labels: {self.available_labels}"
         if pred_label is not None:
             assert pred_label in self.available_labels, f"target_pred '{pred_label}' not found in available labels: {self.available_labels}"
         assert 0.0 <= min_entropy <= max_entropy <= 1.0, "Entropy bounds must satisfy 0.0 <= min_entropy <= max_entropy <= 1.0"
         assert ranking_order in [None, "ascending", "decending"], "ranking_order must be one of None, 'ascending', or 'decending'"
-
-        if samples is not None and labels is not None:
-            self.create_profile(samples, labels, verbose=verbose)
 
         filtered_indices = []
         for i, (label, pred, entropy) in enumerate(zip(self.labels, self.preds, self.entropies)):
@@ -104,7 +117,7 @@ class LexicalBiasLens(LexicalBiasModel):
         """
         Analyzes a single input sample and returns its bias profile scores.
         """
-        assert self.bias_profile is not None, "Please fit() the model before analysis."
+        assert self.bias_profile is not None, "Please fit_and_build() the model before analysis."
         if metric is None:
             metric = self.metric
 
@@ -145,6 +158,7 @@ class LexicalBiasLens(LexicalBiasModel):
             epsilon=model.epsilon,
         )
         lens.data_stats = model.data_stats
+        lens.sample_hashs = model.sample_hashs
         lens.build_bias_profile()
         lens.labels = data_profile["labels"]
         lens.preds = data_profile["preds"]
@@ -173,7 +187,7 @@ if __name__ == "__main__":
 
     if not os.path.exists("saved_models/lexical_bias_lens"):
         lens = LexicalBiasLens(max_n=1, metric="LMI")
-        lens.create_profile(samples, labels)
+        lens.create_profile(samples, labels, verbose=True)
         lens.save("saved_models/lexical_bias_lens")
     else:
         lens = LexicalBiasLens.load("saved_models/lexical_bias_lens", metric="LMI")

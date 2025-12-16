@@ -2,9 +2,9 @@ import os
 import json
 import math
 from tqdm import tqdm
-from typing import List, Dict, Any
-from utils.ngrams import get_ngrams
 from collections import defaultdict
+from typing import List, Set, Dict, Any
+from utils import get_ngrams, hash_sample
 
 
 class LexicalBiasModel:
@@ -22,6 +22,7 @@ class LexicalBiasModel:
         self.max_n = max_n
         self.epsilon = epsilon
 
+        self.sample_hashs: Set[str] = set()
         self.data_stats: Dict[str, Dict[tuple, int]] = None
         self.bias_profile: Dict[str, Dict[tuple, float]] = None
 
@@ -47,40 +48,56 @@ class LexicalBiasModel:
         return len(self.data_stats)
     
     def clear(self) -> None:
+        self.sample_hashs = set()
         self.data_stats = None
         self.bias_profile = None
 
-    def fit(self, inputs: List[List[Any]], labels: List[str], verbose: bool = True) -> None:
+    def fit(self, samples: List[List[Any]], labels: List[str], verbose: bool = True) -> None:
         if self.data_stats is None:
             self.data_stats = defaultdict(lambda: defaultdict(int)) # count(W, Y)
 
-        with tqdm(total=len(inputs), disable=not verbose, desc="Processing") as pbar:
-            for tokens, label in zip(inputs, labels):
+        # Get new_samples by removing already seen samples
+        new_samples = []
+        new_labels = []
+        for tokens, label in zip(samples, labels):
+            sample_hash = hash_sample(tokens)
+            if sample_hash in self.sample_hashs:
+                continue
+            new_samples.append(tokens)
+            new_labels.append(label)
+
+        if len(new_samples) == 0:
+            return
+
+        with tqdm(total=len(new_samples), disable=not verbose, desc="Fitting new samples") as pbar:
+            for tokens, label in zip(new_samples, new_labels):
                 for ngram in get_ngrams(tokens, min_n=self.min_n, max_n=self.max_n):
                     self.data_stats[label][ngram] += 1
+
+                sample_hash = hash_sample(tokens)
+                self.sample_hashs.add(sample_hash)
+
                 pbar.update(1)
-
-        # Filter n-grams by min_freq
-        for label in self.data_stats:
-            self.data_stats[label] = {ngram: freq for ngram, freq in self.data_stats[label].items() if freq >= self.min_freq}
-
-    def fit_and_build(self, inputs: List[List[Any]], labels: List[str], verbose: bool = True) -> None:
-        self.fit(inputs, labels, verbose=verbose)
-        self.build_bias_profile()
 
     def build_bias_profile(self) -> None:
         assert self.data_stats is not None, "Please fit() the model before building bias profile."
+
+        # Filter n-grams by min_freq
+        filtered_data_stats = {}
+        for label in self.data_stats:
+            filtered_data_stats[label] = {ngram: freq for ngram, freq in self.data_stats[label].items() if freq >= self.min_freq}
+
         total_ngarms = 0
         ngram_freq = defaultdict(int) # count(W)
         label_ngram_freq = defaultdict(lambda: defaultdict(int)) # count(W, Y)
-        for label in self.data_stats:
-            for ngram, freq in self.data_stats[label].items():
+        for label in filtered_data_stats:
+            for ngram, freq in filtered_data_stats[label].items():
                 total_ngarms += freq
                 ngram_freq[ngram] += freq
                 label_ngram_freq[label][ngram] = freq
 
         self.bias_profile = {}
-        for label in self.data_stats:
+        for label in filtered_data_stats:
 
             label_stats = {}
 
@@ -99,7 +116,9 @@ class LexicalBiasModel:
             self.bias_profile[label] = label_stats
 
     def predict(self, samples: List[List[str]], verbose: bool = True) -> List[Dict[str, float]]:
-        assert self.bias_profile is not None, "Please fit_and_build() the model before prediction."
+        if self.bias_profile is None and self.data_stats is not None:
+            self.build_bias_profile()
+        assert self.bias_profile is not None, "Please fit() the model before prediction."
         preds = []
         for tokens in tqdm(samples, disable=not verbose, desc="Predicting"):
             class_scores = {label: 0.0 for label in self.bias_profile.keys()}
@@ -126,17 +145,22 @@ class LexicalBiasModel:
             "min_freq": self.min_freq,
             "metric": self.metric,
             "epsilon": self.epsilon,
-            "data_stats": serializable_stats
+            "data_stats": serializable_stats,
         }
         os.makedirs(filepath, exist_ok=True)
         with open(os.path.join(filepath, "model_params.json"), "w") as f:
             json.dump(model_params, f, ensure_ascii=False, indent=4)
+        with open(os.path.join(filepath, "sample_hashs.txt"), "w") as f:
+            f.write('\n'.join(list(self.sample_hashs)))
 
     @classmethod
     def load(cls, filepath: str, metric: str = None) -> 'LexicalBiasModel':
         assert os.path.exists(os.path.join(filepath, "model_params.json")), f"Model file not found at {os.path.join(filepath, 'model_params.json')}"
         with open(os.path.join(filepath, "model_params.json"), "r") as f:
             model_params = json.load(f)
+        with open(os.path.join(filepath, "sample_hashs.txt"), "r") as f:
+            sample_hashs = f.read().splitlines()
+        model_params["sample_hashs"] = set(sample_hashs)
         if metric is not None:
             assert metric in ["LMI", "PMI", "NPMI"], "Metric must be one of ['LMI', 'PMI', 'NPMI']"
             model_params["metric"] = metric
@@ -145,11 +169,13 @@ class LexicalBiasModel:
             label: {eval(ngram): value for ngram, value in ngram_stats.items()}
             for label, ngram_stats in model_params.pop("data_stats").items()
         }
+
         # Remove unknown parameters for backward compatibility
         known_params = {"max_n", "min_n", "min_freq", "metric", "epsilon"}
         model_params = {k: v for k, v in model_params.items() if k in known_params}
         model = cls(**model_params)
         model.data_stats = deserialized_stats
+        model.sample_hashs = set(model_params.get("sample_hashs", []))
         model.build_bias_profile()
         return model
     
@@ -176,7 +202,7 @@ if __name__ == "__main__":
     save_path = "saved_models/lexical_bias_model"
     if not os.path.exists(save_path):
         model = LexicalBiasModel(max_n=1, metric="NLMI")
-        model.fit_and_build(samples, labels)
+        model.fit(samples, labels)
         model.save(save_path)
     else:
         model = LexicalBiasModel.load(save_path, metric="NLMI")
