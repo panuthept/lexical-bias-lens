@@ -4,7 +4,7 @@ import math
 from tqdm import tqdm
 from collections import defaultdict
 from typing import List, Set, Dict, Any
-from utils import get_ngrams, hash_sample
+from .utils import get_ngrams, hash_sample
 
 
 class LexicalBiasModel:

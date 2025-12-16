@@ -4,7 +4,7 @@ import math
 from copy import deepcopy
 from model import LexicalBiasModel
 from collections import defaultdict
-from utils import get_ngrams, hash_sample
+from .utils import get_ngrams, hash_sample
 from typing import Literal, List, Tuple, Any, Optional
 
 
