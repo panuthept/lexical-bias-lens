@@ -111,8 +111,9 @@ class LexicalBiasModel:
                 NPMI = PMI / (-math.log(p_WY + self.epsilon))
 
                 LMI = count_WY * PMI # freq × PMI
+                nLMI = p_WY * PMI  # P(W,Y) × PMI
 
-                label_stats[ngram] = {"LMI": LMI, "PMI": PMI, "NPMI": NPMI}
+                label_stats[ngram] = {"LMI": LMI, "nLMI": nLMI, "PMI": PMI, "NPMI": NPMI}
             self.bias_profile[label] = label_stats
 
     def predict(self, samples: List[List[str]], verbose: bool = True) -> List[Dict[str, float]]:
@@ -162,7 +163,7 @@ class LexicalBiasModel:
             sample_hashs = f.read().splitlines()
         model_params["sample_hashs"] = set(sample_hashs)
         if metric is not None:
-            assert metric in ["LMI", "PMI", "NPMI"], "Metric must be one of ['LMI', 'PMI', 'NPMI']"
+            assert metric in ["LMI", "nLMI", "PMI", "NPMI"], "Metric must be one of ['LMI', 'nLMI', 'PMI', 'NPMI']"
             model_params["metric"] = metric
 
         deserialized_stats = {
